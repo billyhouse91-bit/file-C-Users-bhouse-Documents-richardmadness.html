@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Milk Carton Fence Runner</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body {
+      background: #121216;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+    canvas {
+      background: #78a7c2;
+      border: 4px solid #222;
+      border-radius: 8px;
+      max-width: 100%;
+      max-height: 80vh;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    #instructions {
+      color: #ccc;
+      margin-top: 12px;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="800" height="400"></canvas>
+<div id="instructions">Press [Space] or Tap Screen to Jump! Grab Green Grapes for Gas & Nipple Rings to Smash!</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// Game State
+let isGameOver = false;
+let gameOverReason = ""; // "gate" or "gas"
+let gameOverTimer = 0;
+let score = 0;
+let frameCount = 0;
+
+// Progressive speed tuning
+const baseSpeed = 3.8;
+let gameSpeed = baseSpeed;
+
+// Gas System (Max 100)
+let gas = 100;
+const gasDepletionRate = 0.08; // Drains constantly
+
+// Screen Shake
+let screenShakeTimer = 0;
+
+// Power-up Timer (60 frames = 1 sec, 300 frames = 5 secs)
+let powerUpTimer = 0;
+let powerUpBannerTimer = 0;
+
+// Ground settings
+const groundHeight = 70;
+const groundY = canvas.height - groundHeight;
+
+// Falling debris & mirror physics
+const particles = [];
+
+// Player (The Milk Carton)
+const player = {
+  x: 80,
+  y: groundY - 60,
+  width: 52,
+  height: 60,
+  vy: 0,
+  gravity: 0.65,
+  jumpPower: -13,
+  isGrounded: true,
+  hasMirrors: true,
+
+  jump() {
+    if (this.isGrounded && !isGameOver) {
+      this.vy = this.jumpPower;
+      this.isGrounded = false;
+    }
+  },
+
+  update() {
+    this.vy += this.gravity;
+    this.y += this.vy;
+
+    if (this.y + this.height >= groundY) {
+      this.y = groundY - this.height;
+      this.vy = 0;
+      this.isGrounded = true;
+    }
+  },
+
+  draw() {
+    const isPowered = powerUpTimer > 0;
+
+    // Glowing Smash Aura when powered up
+    if (isPowered && !isGameOver) {
+      ctx.save();
+      ctx.shadowColor = (frameCount % 6 < 3) ? "#ffe600" : "#ff0055";
+      ctx.shadowBlur = 25;
+      ctx.strokeStyle = "#fffb00";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(this.x - 6, this.y - 14, this.width + 12, this.height + 18);
+      ctx.restore();
+    }
+
+    // 1. Milk Carton Body
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(this.x, this.y + 15, this.width, this.height - 15);
+
+    // Gable top roof
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y + 15);
+    ctx.lineTo(this.x + this.width / 2, this.y);
+    ctx.lineTo(this.x + this.width, this.y + 15);
+    ctx.closePath();
+    ctx.fillStyle = "#e0e0e0";
+    ctx.fill();
+
+    // Red/Blue brand stripe
+    ctx.fillStyle = isPowered ? "#e91e63" : "#1e88e5";
+    ctx.fillRect(this.x, this.y + 28, this.width, 16);
+
+    // Carton Text
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 9px sans-serif";
+    ctx.fillText(isPowered ? "BEAST" : "MILK", this.x + 11, this.y + 40);
+
+    // Wheels
+    ctx.fillStyle = "#1b1b1b";
+    ctx.beginPath();
+    ctx.arc(this.x + 12, this.y + this.height, 6, 0, Math.PI * 2);
+    ctx.arc(this.x + this.width - 12, this.y + this.height, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#9e9e9e";
+    ctx.beginPath();
+    ctx.arc(this.x + 12, this.y + this.height, 2.5, 0, Math.PI * 2);
+    ctx.arc(this.x + this.width - 12, this.y + this.height, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Side Mirrors (Only drawn while intact)
+    if (this.hasMirrors) {
+      ctx.strokeStyle = "#222";
+      ctx.lineWidth = 2.5;
+
+      // Left mirror
+      ctx.beginPath();
+      ctx.moveTo(this.x + 4, this.y + 24);
+      ctx.lineTo(this.x - 8, this.y + 20);
+      ctx.stroke();
+      ctx.fillStyle = "#80d8ff";
+      ctx.fillRect(this.x - 14, this.y + 12, 6, 14);
+      ctx.strokeRect(this.x - 14, this.y + 12, 6, 14);
+
+      // Right mirror
+      ctx.beginPath();
+      ctx.moveTo(this.x + this.width - 4, this.y + 24);
+      ctx.lineTo(this.x + this.width + 8, this.y + 20);
+      ctx.stroke();
+      ctx.fillStyle = "#80d8ff";
+      ctx.fillRect(this.x + this.width + 8, this.y + 12, 6, 14);
+      ctx.strokeRect(this.x + this.width + 8, this.y + 12, 6, 14);
+    }
+
+    // 2. Coworker Driver Head & Single Arm
+    const headX = this.x + this.width / 2;
+    const headY = this.y - 8;
+
+    if (isGameOver) {
+      ctx.strokeStyle = "#ffcc80";
+      ctx.lineWidth = 5;
+      ctx.lineCap = "round";
+
+      // Left arm resting on rim
+      ctx.beginPath();
+      ctx.moveTo(headX - 6, headY + 10);
+      ctx.lineTo(headX - 18, headY + 18);
+      ctx.stroke();
+
+      // SINGLE ARM THROWN UP IN THE AIR
+      ctx.beginPath();
+      ctx.moveTo(headX + 6, headY + 10);
+      ctx.lineTo(headX + 22, headY - 22);
+      ctx.stroke();
+    }
+
+    // Head
+    ctx.fillStyle = "#ffcc80";
+    ctx.beginPath();
+    ctx.arc(headX, headY, 13, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Expression
+    if (isGameOver) {
+      // X-Eyes
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(headX - 6, headY - 4); ctx.lineTo(headX - 2, headY);
+      ctx.moveTo(headX - 2, headY - 4); ctx.lineTo(headX - 6, headY);
+      ctx.moveTo(headX + 2, headY - 4); ctx.lineTo(headX + 6, headY);
+      ctx.moveTo(headX + 6, headY - 4); ctx.lineTo(headX + 2, headY);
+      ctx.stroke();
+
+      // Screaming O-mouth
+      ctx.fillStyle = "#3e0000";
+      ctx.beginPath();
+      ctx.ellipse(headX, headY + 6, 4, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Normal eyes
+      ctx.fillStyle = "#000";
+      ctx.fillRect(headX + 1, headY - 4, 3, 4);
+      ctx.fillRect(headX + 6, headY - 4, 3, 4);
+
+      // Mouth
+      ctx.beginPath();
+      if (isPowered) {
+        ctx.arc(headX + 4, headY + 3, 4, 0, Math.PI, false);
+      } else {
+        ctx.arc(headX + 4, headY + 4, 3, 0, Math.PI, true);
+      }
+      ctx.stroke();
+    }
+  }
+};
+
+// Detach mirrors and trigger bounce physics
+function breakMirrors() {
+  if (!player.hasMirrors) return;
+  player.hasMirrors = false;
+
+  // Left Mirror
+  particles.push({
+    x: player.x - 10,
+    y: player.y + 16,
+    vx: -3.5 - Math.random() * 2,
+    vy: -6 - Math.random() * 2,
+    width: 6,
+    height: 14,
+    rot: 0,
+    vrot: -0.3,
+    color: "#80d8ff"
+  });
+
+  // Right Mirror
+  particles.push({
+    x: player.x + player.width + 10,
+    y: player.y + 16,
+    vx: 4.5 + Math.random() * 3,
+    vy: -7 - Math.random() * 2,
+    width: 6,
+    height: 14,
+    rot: 0,
+    vrot: 0.35,
+    color: "#80d8ff"
+  });
+}
+
+// Arrays for all entities
+const obstacles = [];
+const powerUps = [];
+const grapes = [];
+
+function spawnObstacle() {
+  const gateHeight = 50 + Math.random() * 25;
+  obstacles.push({
+    x: canvas.width,
+    y: groundY - gateHeight,
+    width: 36,
+    height: gateHeight
+  });
+}
+
+function spawnPowerUp() {
+  powerUps.push({
+    x: canvas.width,
+    y: groundY - 65 - Math.random() * 50,
+    radius: 12
+  });
+}
+
+function spawnGrapes() {
+  grapes.push({
+    x: canvas.width,
+    y: groundY - 35 - Math.random() * 55,
+    width: 28,
+    height: 32
+  });
+}
+
+// Gate shatter on powered smash
+function smashGate(obs) {
+  screenShakeTimer = 16;
+  for (let i = 0; i < 14; i++) {
+    particles.push({
+      x: obs.x + Math.random() * obs.width,
+      y: obs.y + Math.random() * obs.height,
+      vx: (Math.random() - 0.2) * 11 + 3,
+      vy: -4 - Math.random() * 6,
+      width: 4,
+      height: 12 + Math.random() * 8,
+      rot: Math.random() * Math.PI,
+      vrot: (Math.random() - 0.5) * 0.4,
+      color: "#1a1a1a"
+    });
+  }
+}
+
+// Draw Black Metal Gate
+function drawMetalGate(obs) {
+  ctx.fillStyle = "#151515";
+  ctx.strokeStyle = "#333333";
+  ctx.lineWidth = 1.5;
+
+  const bars = 4;
+  const barSpacing = obs.width / (bars - 1);
+
+  for (let i = 0; i < bars; i++) {
+    const bx = obs.x + i * barSpacing;
+    ctx.fillRect(bx - 2, obs.y, 4, obs.height);
+    ctx.strokeRect(bx - 2, obs.y, 4, obs.height);
+
+    ctx.beginPath();
+    ctx.moveTo(bx - 4, obs.y);
+    ctx.lineTo(bx, obs.y - 10);
+    ctx.lineTo(bx + 4, obs.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  ctx.fillRect(obs.x - 3, obs.y + 12, obs.width + 6, 4);
+  ctx.strokeRect(obs.x - 3, obs.y + 12, obs.width + 6, 4);
+  ctx.fillRect(obs.x - 3, obs.y + obs.height - 14, obs.width + 6, 4);
+  ctx.strokeRect(obs.x - 3, obs.y + obs.height - 14, obs.width + 6, 4);
+}
+
+// Draw Green Grapes (Gas Fuel)
+function drawGrapes(item) {
+  ctx.save();
+  ctx.translate(item.x, item.y);
+
+  // Bobbing hover
+  const hover = Math.sin(frameCount * 0.1) * 3;
+  ctx.translate(0, hover);
+
+  // Little brown stem
+  ctx.strokeStyle = "#6d4c41";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(14, 2);
+  ctx.lineTo(14, 8);
+  ctx.stroke();
+
+  // Green Leaf
+  ctx.fillStyle = "#388e3c";
+  ctx.beginPath();
+  ctx.ellipse(18, 5, 5, 3, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cluster of Green Grapes
+  ctx.fillStyle = "#76ff03";
+  ctx.strokeStyle = "#43a047";
+  ctx.lineWidth = 1.5;
+
+  const grapeCoords = [
+    [7, 12], [14, 11], [21, 12], // Top row
+    [10, 18], [18, 18], // Mid row
+    [14, 25] // Bottom tip
+  ];
+
+  for (let [gx, gy] of grapeCoords) {
+    ctx.beginPath();
+    ctx.arc(gx, gy, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Soft glow
+  ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+  ctx.beginPath();
+  ctx.arc(12, 16, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Draw Nipple Ring Collectible
+function drawNippleRing(item) {
+  ctx.save();
+  ctx.translate(item.x, item.y);
+
+  const hover = Math.sin(frameCount * 0.08) * 4;
+  ctx.translate(0, hover);
+
+  ctx.shadowColor = "#ffd700";
+  ctx.shadowBlur = 15;
+
+  // Golden ring
+  ctx.beginPath();
+  ctx.arc(0, 0, item.radius, 0.4 * Math.PI, 1.8 * Math.PI, false);
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#ffd700";
+  ctx.stroke();
+
+  // Silver captive balls
+  ctx.fillStyle = "#ffffff";
+  const r = item.radius;
+  ctx.beginPath();
+  ctx.arc(Math.cos(0.4 * Math.PI) * r, Math.sin(0.4 * Math.PI) * r, 3.5, 0, Math.PI * 2);
+  ctx.arc(Math.cos(1.8 * Math.PI) * r, Math.sin(1.8 * Math.PI) * r, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function checkCollision(a, b) {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+function checkCircleCollision(circle, rect) {
+  const distX = Math.abs(circle.x - rect.x - rect.width / 2);
+  const distY = Math.abs(circle.y - rect.y - rect.height / 2);
+  if (distX > (rect.width / 2 + circle.radius)) return false;
+  if (distY > (rect.height / 2 + circle.radius)) return false;
+  return true;
+}
+
+function triggerGameOver(reason) {
+  if (isGameOver) return;
+  isGameOver = true;
+  gameOverReason = reason;
+  screenShakeTimer = 20;
+  breakMirrors();
+}
+
+function resetGame() {
+  obstacles.length = 0;
+  powerUps.length = 0;
+  grapes.length = 0;
+  particles.length = 0;
+  score = 0;
+  gas = 100;
+  frameCount = 0;
+  gameOverTimer = 0;
+  gameOverReason = "";
+  gameSpeed = baseSpeed;
+  powerUpTimer = 0;
+  powerUpBannerTimer = 0;
+  player.y = groundY - player.height;
+  player.vy = 0;
+  player.hasMirrors = true;
+  isGameOver = false;
+  loop();
+}
+
+function handleInput() {
+  if (isGameOver) {
+    if (gameOverTimer > 35) resetGame();
+  } else {
+    player.jump();
+  }
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" || e.code === "ArrowUp") {
+    e.preventDefault();
+    handleInput();
+  }
+});
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  handleInput();
+}, { passive: false });
+canvas.addEventListener("mousedown", handleInput);
+
+// Main Game Loop
+function loop() {
+  frameCount++;
+
+  if (isGameOver) gameOverTimer++;
+  if (powerUpTimer > 0) powerUpTimer--;
+  if (powerUpBannerTimer > 0) powerUpBannerTimer--;
+
+  // Progressive speed ramp: speeds up steadily with score
+  if (!isGameOver) {
+    gameSpeed = baseSpeed + Math.min(score * 0.012, 6.5);
+
+    // Drain Gas
+    gas -= gasDepletionRate;
+    if (gas <= 0) {
+      gas = 0;
+      triggerGameOver("gas");
+    }
+  }
+
+  // Camera Shake
+  ctx.save();
+  if (screenShakeTimer > 0) {
+    const dx = (Math.random() - 0.5) * 8;
+    const dy = (Math.random() - 0.5) * 8;
+    ctx.translate(dx, dy);
+    screenShakeTimer--;
+  }
+
+  // Clear Canvas
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Ground
+  ctx.fillStyle = "#3e8e41";
+  ctx.fillRect(0, groundY, canvas.width, 15);
+  ctx.fillStyle = "#5c4033";
+  ctx.fillRect(0, groundY + 15, canvas.width, groundHeight - 15);
+
+  // Player logic
+  player.update();
+  player.draw();
+
+  // Dynamic Spawner intervals scaled by current speed
+  if (!isGameOver) {
+    const spawnRate = Math.max(75, Math.floor(140 - (gameSpeed - baseSpeed) * 8));
+    if (frameCount % spawnRate === 0) spawnObstacle();
+    if (frameCount % 400 === 0) spawnPowerUp();
+    if (frameCount % 240 === 0) spawnGrapes(); // Spawn green grapes fuel
+  }
+
+  // 1. Process Green Grapes (Gas Fuel)
+  for (let i = grapes.length - 1; i >= 0; i--) {
+    const bunch = grapes[i];
+    if (!isGameOver) bunch.x -= gameSpeed;
+    drawGrapes(bunch);
+
+    if (!isGameOver && checkCollision(player, bunch)) {
+      gas = Math.min(100, gas + 35); // Refuel gas
+      score += 15;
+      grapes.splice(i, 1);
+      continue;
+    }
+
+    if (bunch.x + bunch.width < 0) grapes.splice(i, 1);
+  }
+
+  // 2. Process Nipple Ring Power-ups
+  for (let i = powerUps.length - 1; i >= 0; i--) {
+    const ring = powerUps[i];
+    if (!isGameOver) ring.x -= gameSpeed;
+    drawNippleRing(ring);
+
+    if (!isGameOver && checkCircleCollision(ring, player)) {
+      powerUpTimer = 300;
+      powerUpBannerTimer = 90;
+      powerUps.splice(i, 1);
+      score += 50;
+      continue;
+    }
+
+    if (ring.x + ring.radius < 0) powerUps.splice(i, 1);
+  }
+
+  // 3. Process Black Metal Gates
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const obs = obstacles[i];
+    if (!isGameOver) obs.x -= gameSpeed;
+    drawMetalGate(obs);
+
+    if (!isGameOver && checkCollision(player, obs)) {
+      if (powerUpTimer > 0) {
+        smashGate(obs);
+        obstacles.splice(i, 1);
+        score += 25;
+        continue;
+      } else {
+        triggerGameOver("gate");
+      }
+    }
+
+    if (obs.x + obs.width < 0) {
+      obstacles.splice(i, 1);
+      score += 10;
+    }
+  }
+
+  // 4. Falling & Bouncing Particles (Mirrors + Metal Shards)
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.55;
+    p.rot += p.vrot;
+
+    // Bounce physics
+    if (p.y + p.height / 2 >= groundY) {
+      p.y = groundY - p.height / 2;
+      p.vy = -p.vy * 0.4;
+      p.vx *= 0.6;
+      p.vrot *= 0.6;
+    }
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(-p.width / 2, -p.height / 2, p.width, p.height);
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-p.width / 2, -p.height / 2, p.width, p.height);
+    ctx.restore();
+  }
+
+  // HUD: Score & Speed Indicator
+  ctx.fillStyle = "#111";
+  ctx.font = "bold 18px Arial";
+  ctx.fillText(`Score: ${score}`, 20, 30);
+  ctx.font = "bold 12px Arial";
+  ctx.fillStyle = "#333";
+  ctx.fillText(`Speed: ${gameSpeed.toFixed(1)}x`, 20, 48);
+
+  // HUD: Grape Gas Tank Meter
+  ctx.fillStyle = "#111";
+  ctx.font = "bold 12px Arial";
+  ctx.fillText("GRAPE GAS", 680, 25);
+
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillRect(680, 32, 100, 14);
+
+  // Gas fill color (Turns red if running low)
+  ctx.fillStyle = gas > 25 ? "#76ff03" : "#ff3d00";
+  ctx.fillRect(682, 34, Math.max(0, (gas / 100) * 96), 10);
+  ctx.strokeStyle = "#222";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(680, 32, 100, 14);
+
+  // Power-up Time Bar
+  if (powerUpTimer > 0 && !isGameOver) {
+    const barWidth = 140;
+    const currentBar = (powerUpTimer / 300) * barWidth;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(20, 60, barWidth, 10);
+    ctx.fillStyle = "#ffeb3b";
+    ctx.fillRect(20, 60, currentBar, 10);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 11px Arial";
+    ctx.fillText("SMASH TIME!", 20, 82);
+  }
+
+  // Nipple Ring Banner
+  if (powerUpBannerTimer > 0 && !isGameOver) {
+    ctx.save();
+    ctx.textAlign = "center";
+    const pulse = 1 + Math.sin(frameCount * 0.4) * 0.08;
+    ctx.translate(canvas.width / 2, 90);
+    ctx.scale(pulse, pulse);
+    ctx.shadowColor = "#ff007f";
+    ctx.shadowBlur = 20;
+    ctx.font = "900 36px 'Impact', Arial Black, sans-serif";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 6;
+    ctx.strokeText("⚡ NIPPLE RING POWER UP! ⚡", 0, 0);
+    ctx.fillStyle = (frameCount % 4 < 2) ? "#ffe600" : "#ff0077";
+    ctx.fillText("⚡ NIPPLE RING POWER UP! ⚡", 0, 0);
+    ctx.restore();
+  }
+
+  ctx.restore();
+
+  // Game Over Screen
+  if (isGameOver && gameOverTimer > 30) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = "center";
+    if (gameOverReason === "gate") {
+      ctx.fillStyle = "#ff3333";
+      ctx.font = "bold 34px Arial";
+      ctx.fillText("SMASHED INTO THE GATE!", canvas.width / 2, canvas.height / 2 - 35);
+      ctx.fillStyle = "#ffeb3b";
+      ctx.font = "16px Arial";
+      ctx.fillText("His mirrors broke clean off!", canvas.width / 2, canvas.height / 2 - 5);
+    } else {
+      ctx.fillStyle = "#ff9100";
+      ctx.font = "bold 34px Arial";
+      ctx.fillText("RAN OUT OF GRAPE GAS!", canvas.width / 2, canvas.height / 2 - 35);
+      ctx.fillStyle = "#b2ff59";
+      ctx.font = "16px Arial";
+      ctx.fillText("Collect green grapes to keep driving!", canvas.width / 2, canvas.height / 2 - 5);
+    }
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 18px Arial";
+    ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 30);
+    ctx.fillText("Tap or press Space to play again", canvas.width / 2, canvas.height / 2 + 65);
+    ctx.textAlign = "left";
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// Start Game
+loop();
+</script>
+</body>
+</html>
